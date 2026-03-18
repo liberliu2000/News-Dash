@@ -89,7 +89,15 @@ class BaseFeedbackParser:
 class RuleFeedbackParser(BaseFeedbackParser):
     def parse(self, sender: str, subject: str, text: str, message_id: str = "") -> FeedbackInstruction:
         normalized_text = self._clean_reply_text(text)
-        instruction = FeedbackInstruction(sender=sender, subject=subject, received_at=datetime.now(timezone.utc).isoformat(), raw_text=normalized_text, message_id=message_id, parsed_by="rule")
+        instruction = FeedbackInstruction(
+            sender=sender,
+            subject=subject,
+            received_at=datetime.now(timezone.utc).isoformat(),
+            raw_text=normalized_text,
+            message_id=message_id,
+            parsed_by="rule",
+        )
+
         urls = URL_RE.findall(normalized_text)
         for url in urls:
             lower = url.lower()
@@ -103,6 +111,7 @@ class RuleFeedbackParser(BaseFeedbackParser):
         for match in KEYWORD_BLOCK_RE.findall(normalized_text):
             instruction.positive_keywords.extend(self._split_keywords(match))
             instruction.summary_focus.extend(self._split_keywords(match))
+
         for match in SOURCE_BLOCK_RE.findall(normalized_text):
             parts = self._split_keywords(match)
             for part in parts:
@@ -153,7 +162,7 @@ class RuleFeedbackParser(BaseFeedbackParser):
             stripped = line.strip()
             if not stripped:
                 continue
-            if stripped.startswith(">"):  # quoted reply
+            if stripped.startswith(">"):
                 continue
             if stripped.lower().startswith(("from:", "sent:", "subject:", "to:")):
                 continue
@@ -167,7 +176,18 @@ class RuleFeedbackParser(BaseFeedbackParser):
     @staticmethod
     def _extract_candidate_keywords(text: str) -> List[str]:
         candidates = []
-        for phrase in ["single-cell sequencing", "spatial transcriptomics", "multiomics", "long-read sequencing", "liquid biopsy", "precision medicine", "临床测序", "肿瘤测序", "单细胞", "空间转录组"]:
+        for phrase in [
+            "single-cell sequencing",
+            "spatial transcriptomics",
+            "multiomics",
+            "long-read sequencing",
+            "liquid biopsy",
+            "precision medicine",
+            "临床测序",
+            "肿瘤测序",
+            "单细胞",
+            "空间转录组",
+        ]:
             if phrase.lower() in text.lower():
                 candidates.append(phrase)
         return candidates
@@ -188,25 +208,61 @@ class RuleFeedbackParser(BaseFeedbackParser):
         actions: List[ArticleFeedbackAction] = []
         urls = URL_RE.findall(text)
         ids = NEWS_ID_RE.findall(text)
+        title_matches = TITLE_FEEDBACK_RE.findall(text)
+
         is_like = any(p.search(text) for p in LIKE_PATTERNS)
         is_dislike = any(p.search(text) for p in DISLIKE_PATTERNS)
         vote = 1 if is_like and not is_dislike else (-1 if is_dislike else 0)
         if vote == 0:
             return actions
+
         for news_id in ids:
-            actions.append(ArticleFeedbackAction(article_id=news_id.lower(), vote=vote, reason="explicit_article_vote"))
+            actions.append(
+                ArticleFeedbackAction(
+                    article_id=news_id.lower(),
+                    vote=vote,
+                    reason="explicit_article_vote",
+                )
+            )
+
         for url in urls:
-            actions.append(ArticleFeedbackAction(article_link=url, vote=vote, reason="explicit_article_vote"))
-        for title in TITLE_FEEDBACK_RE.findall(text):
+            actions.append(
+                ArticleFeedbackAction(
+                    article_link=url,
+                    vote=vote,
+                    reason="explicit_article_vote",
+                )
+            )
+
+        for title in title_matches:
             clean = title.strip().strip('"“”')
             if clean:
-                actions.append(ArticleFeedbackAction(article_title=clean, vote=vote, reason="explicit_article_vote_title"))
-        if not ids and not urls and not TITLE_FEEDBACK_RE.findall(text):
+                actions.append(
+                    ArticleFeedbackAction(
+                        article_title=clean,
+                        vote=vote,
+                        reason="explicit_article_vote_title",
+                    )
+                )
+
+        if not ids and not urls and not title_matches:
             for line in text.splitlines():
                 if any(p.search(line) for p in LIKE_PATTERNS + DISLIKE_PATTERNS):
-                    candidate = re.sub(r"(?:点赞|点踩|like|dislike|thumbs?\s*up|thumbs?\s*down)\s*[:：-]?", "", line, flags=re.IGNORECASE).strip()
+                    candidate = re.sub(
+                        r"(?:点赞|点踩|like|dislike|thumbs?\s*up|thumbs?\s*down)\s*[:：-]?",
+                        "",
+                        line,
+                        flags=re.IGNORECASE,
+                    ).strip()
                     if candidate and len(candidate) > 8:
-                        actions.append(ArticleFeedbackAction(article_title=candidate, vote=vote, reason="explicit_article_vote_title_fuzzy"))
+                        actions.append(
+                            ArticleFeedbackAction(
+                                article_title=candidate,
+                                vote=vote,
+                                reason="explicit_article_vote_title_fuzzy",
+                            )
+                        )
+
         deduped = []
         seen = set()
         for action in actions:
@@ -223,21 +279,31 @@ class LLMFeedbackParser(BaseFeedbackParser):
         self.session = requests.Session()
         if settings.proxies:
             self.session.proxies.update(settings.proxies)
-        self.session.headers.update({"Authorization": f"Bearer {settings.llm_api_key}", "Content-Type": "application/json"})
+        self.session.headers.update(
+            {
+                "Authorization": f"Bearer {settings.llm_api_key}",
+                "Content-Type": "application/json",
+            }
+        )
         self.endpoint = f"{settings.llm_base_url}/chat/completions"
         self.rule_parser = RuleFeedbackParser(settings)
 
     def parse(self, sender: str, subject: str, text: str, message_id: str = "") -> FeedbackInstruction:
         normalized_text = self.rule_parser._clean_reply_text(text)
         fallback = self.rule_parser.parse(sender, subject, normalized_text, message_id)
+
         prompt = (
             "你是邮件反馈解析器。请把下面的用户反馈解析成 JSON。"
-            "只输出 JSON，不要加解释。字段必须包含：added_rss_feeds, added_web_pages, added_api_endpoints, positive_keywords, negative_keywords, preferred_sources, disliked_sources, summary_style, summary_max_chars, summary_focus, satisfaction, article_feedbacks。"
+            "只输出 JSON，不要加解释。字段必须包含："
+            "added_rss_feeds, added_web_pages, added_api_endpoints, "
+            "positive_keywords, negative_keywords, preferred_sources, disliked_sources, "
+            "summary_style, summary_max_chars, summary_focus, satisfaction, article_feedbacks。"
             "article_feedbacks 是数组，每项包含 article_id, article_link, article_title, vote(-1/1), reason。"
             "无法确定则返回空数组或 null。\n\n"
             f"邮件主题：{subject}\n"
             f"邮件正文：{normalized_text}"
         )
+
         payload = {
             "model": self.settings.llm_model,
             "messages": [
@@ -247,6 +313,7 @@ class LLMFeedbackParser(BaseFeedbackParser):
             "temperature": 0.0,
             "max_tokens": min(self.settings.llm_max_tokens, 700),
         }
+
         last_exc = None
         for attempt in range(1, self.settings.llm_max_retries + 1):
             try:
@@ -258,7 +325,8 @@ class LLMFeedbackParser(BaseFeedbackParser):
                 data = self._parse_json(content)
                 if not isinstance(data, dict):
                     raise ValueError(f"LLM 返回不是 JSON 对象: {content[:300]}")
-                merged = FeedbackInstruction(
+
+                return FeedbackInstruction(
                     sender=sender,
                     subject=subject,
                     received_at=datetime.now(timezone.utc).isoformat(),
@@ -275,15 +343,18 @@ class LLMFeedbackParser(BaseFeedbackParser):
                     summary_max_chars=data.get("summary_max_chars") or fallback.summary_max_chars,
                     summary_focus=self._merge_list(fallback.summary_focus, data.get("summary_focus", [])),
                     satisfaction=data.get("satisfaction") or fallback.satisfaction,
-                    article_feedbacks=self._merge_article_feedback(fallback.article_feedbacks, data.get("article_feedbacks", [])),
+                    article_feedbacks=self._merge_article_feedback(
+                        fallback.article_feedbacks,
+                        data.get("article_feedbacks", []),
+                    ),
                     parsed_by="llm+rule",
                 )
-                return merged
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 logger.warning("LLM 反馈解析失败，第 %s/%s 次重试: %s", attempt, self.settings.llm_max_retries, exc)
                 if attempt < self.settings.llm_max_retries:
-                    time.sleep(min(2 ** attempt, 8))
+                    time.sleep(min(2**attempt, 8))
+
         logger.warning("LLM 反馈解析失败，回退规则解析: %s", last_exc)
         return fallback
 
@@ -339,7 +410,11 @@ class FeedbackProcessor:
         self.settings = settings
         self.profile_store = UserProfileStore(settings)
         self.logger = FeedbackLogger(settings.feedback_log_path)
-        self.parser = LLMFeedbackParser(settings) if settings.feedback_use_llm_parser or settings.feedback_parser_provider.lower() == "llm" else RuleFeedbackParser(settings)
+        self.parser = (
+            LLMFeedbackParser(settings)
+            if settings.feedback_use_llm_parser or settings.feedback_parser_provider.lower() == "llm"
+            else RuleFeedbackParser(settings)
+        )
         self.state_store = NewsStateStore(settings.state_db_path)
         self.mailer = Mailer(settings)
 
@@ -347,100 +422,253 @@ class FeedbackProcessor:
         instructions: List[FeedbackInstruction] = []
         if not self.settings.feedback_enabled:
             return instructions
+
         for instruction in self._collect_feedback_from_imap():
             profile = self.profile_store.load(instruction.sender)
             profile = self.profile_store.apply_decay(profile)
             profile = self._apply_instruction(profile, instruction)
             self.profile_store.save(profile)
-            self.profile_store.log_feedback_event(instruction.sender, instruction.message_id, instruction.received_at, instruction.subject, instruction.parsed_by, instruction.raw_text, json.dumps(asdict(instruction), ensure_ascii=False))
+
+            self.profile_store.log_feedback_event(
+                instruction.sender,
+                instruction.message_id,
+                instruction.received_at,
+                instruction.subject,
+                instruction.parsed_by,
+                instruction.raw_text,
+                json.dumps(asdict(instruction), ensure_ascii=False),
+            )
             self.logger.append(instruction)
+
             if instruction.message_id:
                 self.profile_store.mark_message_processed(instruction.message_id)
+
             if self.settings.feedback_auto_reply:
                 try:
                     self.mailer.send_feedback_ack(instruction.sender, instruction)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("发送反馈回执失败: %s", exc)
+
             instructions.append(instruction)
+
         return instructions
 
     def _collect_feedback_from_imap(self) -> List[FeedbackInstruction]:
         mailbox = self._connect_imap()
         if mailbox is None:
             return []
+
         instructions: List[FeedbackInstruction] = []
+        selected = False
+
         try:
-            mailbox.select(self.settings.feedback_mailbox)
-            status, data = mailbox.search(None, self.settings.feedback_search_criteria)
+            mailbox_name = (self.settings.feedback_mailbox or "INBOX").strip() or "INBOX"
+            logger.info("准备选择反馈邮箱文件夹: %s", mailbox_name)
+
+            status, select_data = mailbox.select(mailbox_name)
+            logger.info("IMAP select 返回: status=%s data=%s", status, select_data)
+
+            if status != "OK":
+                logger.warning("选择反馈邮箱文件夹失败: mailbox=%s data=%s", mailbox_name, select_data)
+                return []
+
+            selected = True
+
+            criteria = (self.settings.feedback_search_criteria or "UNSEEN").strip() or "UNSEEN"
+            logger.info("开始搜索反馈邮件: criteria=%s", criteria)
+
+            status, data = mailbox.search(None, criteria)
+            logger.info("IMAP search 返回: status=%s data=%s", status, data)
+
             if status != "OK":
                 logger.warning("搜索反馈邮件失败: %s", data)
                 return []
-            message_ids = data[0].split()[-self.settings.feedback_max_emails_per_run :]
+
+            raw_ids = data[0] if data and len(data) > 0 else b""
+            message_ids = raw_ids.split()[-self.settings.feedback_max_emails_per_run :]
             logger.info("本轮检测到 %s 封候选反馈邮件", len(message_ids))
+
             for msg_seq in message_ids:
-                status, msg_data = mailbox.fetch(msg_seq, "(RFC822)")
-                if status != "OK" or not msg_data:
+                try:
+                    status, msg_data = mailbox.fetch(msg_seq, "(RFC822)")
+                    if status != "OK" or not msg_data:
+                        logger.warning("获取邮件失败: seq=%s status=%s", msg_seq, status)
+                        continue
+
+                    raw_email = None
+                    for item in msg_data:
+                        if isinstance(item, tuple) and len(item) >= 2:
+                            raw_email = item[1]
+                            break
+
+                    if not raw_email:
+                        logger.warning("邮件内容为空: seq=%s", msg_seq)
+                        continue
+
+                    msg = email.message_from_bytes(raw_email)
+                    sender = parseaddr(self._decode_header_value(msg.get("From", "")))[1].lower().strip()
+                    subject = self._decode_header_value(msg.get("Subject", ""))
+                    message_id = (msg.get("Message-ID", "") or "").strip()
+
+                    if message_id and self.profile_store.is_message_processed(message_id):
+                        logger.info("跳过已处理反馈邮件: %s", message_id)
+                        if self.settings.feedback_mark_seen:
+                            mailbox.store(msg_seq, "+FLAGS", "\\Seen")
+                        continue
+
+                    text = self._extract_text(msg)
+                    if not self._is_feedback_email(subject, text):
+                        logger.info("跳过非反馈邮件: subject=%s", subject)
+                        continue
+
+                    instruction = self.parser.parse(
+                        sender=sender,
+                        subject=subject,
+                        text=text,
+                        message_id=message_id,
+                    )
+                    instructions.append(instruction)
+
+                    if self.settings.feedback_mark_seen:
+                        mailbox.store(msg_seq, "+FLAGS", "\\Seen")
+
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("处理单封反馈邮件失败: seq=%s error=%s", msg_seq, exc)
                     continue
-                raw_email = msg_data[0][1]
-                msg = email.message_from_bytes(raw_email)
-                sender = parseaddr(self._decode_header_value(msg.get("From", "")))[1].lower().strip()
-                subject = self._decode_header_value(msg.get("Subject", ""))
-                message_id = (msg.get("Message-ID", "") or "").strip()
-                if message_id and self.profile_store.is_message_processed(message_id):
-                    continue
-                text = self._extract_text(msg)
-                if not self._is_feedback_email(subject, text):
-                    continue
-                instruction = self.parser.parse(sender=sender, subject=subject, text=text, message_id=message_id)
-                instructions.append(instruction)
-                if self.settings.feedback_mark_seen:
-                    mailbox.store(msg_seq, "+FLAGS", "\\Seen")
+
         finally:
-            try:
-                mailbox.close()
-            except Exception:
-                pass
-            mailbox.logout()
+            self._cleanup_mailbox(mailbox, selected=selected)
+
         return instructions
 
     def _connect_imap(self):
         try:
-            if self.settings.feedback_imap_use_ssl:
-                mailbox = imaplib.IMAP4_SSL(self.settings.feedback_imap_host, self.settings.feedback_imap_port)
+            host = self.settings.feedback_imap_host
+            port = self.settings.feedback_imap_port
+            use_ssl = self.settings.feedback_imap_use_ssl
+
+            logger.info("连接反馈邮箱: host=%s port=%s ssl=%s", host, port, use_ssl)
+
+            if use_ssl:
+                mailbox = imaplib.IMAP4_SSL(host, port)
             else:
-                mailbox = imaplib.IMAP4(self.settings.feedback_imap_host, self.settings.feedback_imap_port)
-            mailbox.login(self.settings.feedback_email, self.settings.feedback_password)
+                mailbox = imaplib.IMAP4(host, port)
+
+            login_status, login_data = mailbox.login(
+                self.settings.feedback_email,
+                self.settings.feedback_password,
+            )
+            logger.info("IMAP login 返回: status=%s data=%s", login_status, login_data)
+
+            if login_status != "OK":
+                raise RuntimeError(f"IMAP 登录失败: {login_data}")
+
+            self._send_imap_id_if_needed(mailbox)
             return mailbox
+
         except Exception as exc:  # noqa: BLE001
             logger.warning("连接反馈邮箱失败: %s", exc)
             return None
 
+    def _send_imap_id_if_needed(self, mailbox) -> None:
+        """
+        兼容网易系邮箱（163/126/yeah）可能要求的 IMAP ID。
+        不是所有邮箱都需要，也不是所有服务端都支持，所以失败时只记日志，不中断主流程。
+        """
+        email_addr = (self.settings.feedback_email or "").lower().strip()
+        if not any(domain in email_addr for domain in ("@163.com", "@126.com", "@yeah.net")):
+            return
+
+        try:
+            if "ID" not in imaplib.Commands:
+                imaplib.Commands["ID"] = ("AUTH",)
+
+            client_name = "NGSNewsDigest"
+            contact = self.settings.feedback_email or ""
+            vendor = "OpenAI-Generated-Client"
+            version = "1.0.0"
+
+            # 按 RFC 2971 的 ID 参数格式构造
+            id_args = f'("name" "{client_name}" "contact" "{contact}" "vendor" "{vendor}" "version" "{version}")'
+            typ, dat = mailbox._simple_command("ID", id_args)
+            mailbox._untagged_response(typ, dat, "ID")
+            logger.info("已发送网易兼容 IMAP ID 命令: status=%s data=%s", typ, dat)
+
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("发送 IMAP ID 命令失败，继续后续流程: %s", exc)
+
+    def _cleanup_mailbox(self, mailbox, selected: bool = False) -> None:
+        if mailbox is None:
+            return
+
+        if selected:
+            try:
+                mailbox.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("关闭已选中邮箱文件夹失败: %s", exc)
+
+        try:
+            mailbox.logout()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("IMAP logout 失败: %s", exc)
+
     def _is_feedback_email(self, subject: str, text: str) -> bool:
         haystack = f"{subject}\n{text[:800]}".lower()
-        return any(token.lower() in haystack for token in self.settings.feedback_subject_keywords) or any(marker in haystack for marker in ["增加来源", "关键词", "关注", "摘要", "不相关", "feedback", "点赞", "点踩", "like", "dislike", "标题"])
+        return any(token.lower() in haystack for token in self.settings.feedback_subject_keywords) or any(
+            marker in haystack
+            for marker in [
+                "增加来源",
+                "关键词",
+                "关注",
+                "摘要",
+                "不相关",
+                "feedback",
+                "点赞",
+                "点踩",
+                "like",
+                "dislike",
+                "标题",
+            ]
+        )
 
     def _apply_instruction(self, profile: UserProfile, instruction: FeedbackInstruction) -> UserProfile:
         profile.custom_rss_feeds = self.profile_store.merge_unique(profile.custom_rss_feeds, instruction.added_rss_feeds)
         profile.custom_web_pages = self.profile_store.merge_unique(profile.custom_web_pages, instruction.added_web_pages)
         profile.custom_api_endpoints = self.profile_store.merge_unique(profile.custom_api_endpoints, instruction.added_api_endpoints)
         profile.summary_focus = self.profile_store.merge_unique(profile.summary_focus, instruction.summary_focus)
+
         if instruction.summary_style:
             profile.summary_style = instruction.summary_style
+
         if instruction.summary_max_chars:
             profile.summary_max_chars = max(40, min(300, int(instruction.summary_max_chars)))
+
         for keyword in instruction.positive_keywords:
             profile.preferred_keywords[keyword] = round(profile.preferred_keywords.get(keyword, 0.0) + 1.0, 4)
+
         for keyword in instruction.negative_keywords:
             profile.negative_keywords[keyword] = round(profile.negative_keywords.get(keyword, 0.0) + 1.0, 4)
+
         for source in instruction.preferred_sources:
             profile.preferred_sources[source] = round(profile.preferred_sources.get(source, 0.0) + 1.0, 4)
+
         for source in instruction.disliked_sources:
             profile.preferred_sources[source] = round(profile.preferred_sources.get(source, 0.0) - 1.0, 4)
+
         for action in instruction.article_feedbacks:
             fingerprint = self._resolve_fingerprint(profile.email, action)
             if not fingerprint or action.vote not in {-1, 1}:
                 continue
-            self.profile_store.record_article_feedback(profile.email, fingerprint, action.vote, article_title=action.article_title or "", article_link=action.article_link or "", reason=action.reason)
+
+            self.profile_store.record_article_feedback(
+                profile.email,
+                fingerprint,
+                action.vote,
+                article_title=action.article_title or "",
+                article_link=action.article_link or "",
+                reason=action.reason,
+            )
+
         profile.explicit_article_feedback = self.profile_store.load_article_feedback(profile.email)
         profile.feedback_history_count += 1
         return profile
@@ -468,6 +696,7 @@ class FeedbackProcessor:
                     html = re.sub(r"<[^>]+>", " ", html)
                     parts.append(html)
             return "\n".join(p for p in parts if p).strip()
+
         return self._decode_payload(msg).strip()
 
     @staticmethod
@@ -484,13 +713,26 @@ class FeedbackProcessor:
     def _resolve_fingerprint(self, recipient: str, action: ArticleFeedbackAction) -> Optional[str]:
         if action.article_fingerprint:
             return action.article_fingerprint.lower()
+
         if action.article_id and re.fullmatch(r"[a-f0-9]{6,16}", action.article_id, re.IGNORECASE):
             return action.article_id.lower()
+
         if action.article_link:
             return f"url:{action.article_link.strip().lower()}"
+
         if action.article_title:
-            match = self.state_store.find_recent_match_by_title(recipient, action.article_title, threshold=self.settings.fuzzy_title_match_threshold)
+            match = self.state_store.find_recent_match_by_title(
+                recipient,
+                action.article_title,
+                threshold=self.settings.fuzzy_title_match_threshold,
+            )
             if match:
-                logger.info("标题模糊匹配成功: %s -> %s (score=%s)", action.article_title, match.get("title"), match.get("score"))
+                logger.info(
+                    "标题模糊匹配成功: %s -> %s (score=%s)",
+                    action.article_title,
+                    match.get("title"),
+                    match.get("score"),
+                )
                 return str(match["fingerprint"])
+
         return None
