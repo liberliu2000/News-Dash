@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NGS Dashboard</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">NGS Dashboard</div>
+      <nav>
+        <a href="#overview">概览</a>
+        <a href="#config">配置管理</a>
+        <a href="#sources">抓取源管理</a>
+        <a href="#profiles">用户画像</a>
+        <a href="#feedback-logs">反馈日志</a>
+        <a href="#news">今日新闻</a>
+        <a href="#run">运行控制</a>
+      </nav>
+      <div class="sidebar-meta">
+        <div>个性化排序</div>
+        <div>跨天去重</div>
+        <div>规则 + LLM 反馈解析</div>
+      </div>
+    </aside>
+    <main class="content">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="toast-stack">
+            {% for category, message in messages %}
+              <div class="toast {{ category }}">{{ message }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>

@@ -1,0 +1,160 @@
+{% extends 'base.html' %}
+{% block content %}
+<section id="overview" class="panel">
+  <div class="section-header">
+    <h1>系统概览</h1>
+    <div class="chips"><span class="chip">健康度：{{ overview.health }}</span><span class="chip">状态：{{ overview.status }}</span></div>
+  </div>
+  <div class="cards four">
+    <div class="card metric"><div class="label">今日新闻数量</div><div class="value">{{ overview.today_news_count }}</div></div>
+    <div class="card metric"><div class="label">待处理反馈数</div><div class="value">{{ overview.pending_feedback_count }}</div></div>
+    <div class="card metric"><div class="label">上次运行时间</div><div class="value small">{{ overview.last_run_time or '暂无' }}</div></div>
+    <div class="card metric"><div class="label">系统状态</div><div class="value small">{{ overview.health }}</div></div>
+  </div>
+  {% if overview.last_error %}<div class="alert">最近错误：{{ overview.last_error }}</div>{% endif %}
+  <div class="action-row">
+    <form method="post" action="{{ url_for('run_action', mode='full') }}"><button class="primary">立即运行抓取与推送</button></form>
+    <form method="post" action="{{ url_for('run_action', mode='feedback') }}"><button>立即检查反馈邮箱</button></form>
+    <form method="post" action="{{ url_for('run_action', mode='fetch') }}"><button>仅抓取预览</button></form>
+  </div>
+</section>
+
+<section id="config" class="panel">
+  <div class="section-header"><h2>配置管理</h2><span class="hint">保存后写回 .env 文件。密码类字段留空表示保持原值。</span></div>
+  <div class="grid two">
+    {% for group_name, keys in config_groups.items() %}
+    <form class="card form-card" method="post" action="{{ url_for('save_config_group', group=group_name) }}">
+      <h3>{{ {'llm':'LLM 设置','smtp':'邮件发送设置','feedback':'反馈邮箱设置','sources':'抓取源设置','weights':'个性化权重'}[group_name] }}</h3>
+      {% for key in keys %}
+      <label>
+        <span>{{ key }}</span>
+        {% set current = masked_env.get(key, env_values.get(key, '')) %}
+        <input name="{{ key }}" value="{% if key not in ['LLM_API_KEY','SMTP_PASSWORD','FEEDBACK_PASSWORD','NEWS_API_KEY'] %}{{ env_values.get(key, '') }}{% endif %}" placeholder="{{ current }}" type="{% if key in ['LLM_API_KEY','SMTP_PASSWORD','FEEDBACK_PASSWORD','NEWS_API_KEY'] %}password{% else %}text{% endif %}">
+      </label>
+      {% endfor %}
+      <button class="primary">保存（模拟）</button>
+    </form>
+    {% endfor %}
+  </div>
+</section>
+
+<section id="sources" class="panel">
+  <div class="section-header"><h2>抓取源管理</h2><span class="hint">支持 RSS、网页列表页、API Endpoint。</span></div>
+  <div class="card">
+    <form class="inline-form" method="post" action="{{ url_for('add_source') }}">
+      <select name="env_key"><option value="RSS_FEEDS">RSS</option><option value="WEB_PAGES">Web Pages</option><option value="NEWS_API_ENDPOINTS">API Endpoints</option></select>
+      <input name="value" placeholder="输入新的抓取源 URL">
+      <button class="primary">新增</button>
+    </form>
+  </div>
+  <div class="table-wrap card">
+    <table>
+      <thead><tr><th>类型</th><th>地址</th><th>操作</th></tr></thead>
+      <tbody>
+      {% for item in source_items %}
+      <tr>
+        <td>{{ item.source_type }}</td>
+        <td class="mono">{{ item.value }}</td>
+        <td>
+          <div class="table-actions">
+            <form method="post" action="{{ url_for('test_source') }}"><input type="hidden" name="value" value="{{ item.value }}"><input type="hidden" name="source_type" value="{{ item.source_type }}"><button>测试抓取</button></form>
+            <form method="post" action="{{ url_for('delete_source') }}"><input type="hidden" name="env_key" value="{{ item.env_key }}"><input type="hidden" name="idx" value="{{ item.idx }}"><button class="danger">删除</button></form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="profiles" class="panel">
+  <div class="section-header"><h2>用户画像查看 / 编辑</h2><span class="hint">支持多用户画像数据库。键值格式可写成 keyword:1.5。</span></div>
+  <div class="grid profile-layout">
+    <div class="card">
+      <h3>用户列表</h3>
+      {% for profile in profiles %}
+      <a class="profile-link {% if profile.email == selected_profile.email %}active{% endif %}" href="{{ url_for('dashboard', email=profile.email) }}#profiles">{{ profile.email }}</a>
+      {% endfor %}
+    </div>
+    <form class="card form-card" method="post" action="{{ url_for('save_profile') }}">
+      <h3>{{ selected_profile.email or '未选择用户' }}</h3>
+      <input type="hidden" name="email" value="{{ selected_profile.email }}">
+      <label><span>摘要风格</span><select name="summary_style">{% for style in summary_styles %}<option value="{{ style }}" {% if selected_profile.summary_style == style %}selected{% endif %}>{{ style }}</option>{% endfor %}</select></label>
+      <label><span>摘要长度</span><input type="number" name="summary_max_chars" value="{{ selected_profile.summary_max_chars }}"></label>
+      <label><span>关注焦点（逗号分隔）</span><input name="summary_focus" value="{{ selected_profile.summary_focus|join(',') }}"></label>
+      <label><span>偏好关键词</span><textarea name="preferred_keywords">{% for k,v in selected_profile.preferred_keywords.items() %}{{ k }}:{{ v }}
+{% endfor %}</textarea></label>
+      <label><span>负向关键词</span><textarea name="negative_keywords">{% for k,v in selected_profile.negative_keywords.items() %}{{ k }}:{{ v }}
+{% endfor %}</textarea></label>
+      <label><span>偏好来源</span><textarea name="preferred_sources">{% for k,v in selected_profile.preferred_sources.items() %}{{ k }}:{{ v }}
+{% endfor %}</textarea></label>
+      <label><span>自定义 RSS</span><textarea name="custom_rss_feeds">{{ selected_profile.custom_rss_feeds|join('\n') }}</textarea></label>
+      <label><span>自定义 Web Pages</span><textarea name="custom_web_pages">{{ selected_profile.custom_web_pages|join('\n') }}</textarea></label>
+      <label><span>自定义 API Endpoints</span><textarea name="custom_api_endpoints">{{ selected_profile.custom_api_endpoints|join('\n') }}</textarea></label>
+      <button class="primary">保存画像</button>
+    </form>
+  </div>
+</section>
+
+<section id="feedback-logs" class="panel">
+  <div class="section-header"><h2>反馈日志查看</h2><span class="hint">支持按日期筛选，展示解析动作与原文。</span></div>
+  <div class="card">
+    <form class="inline-form" method="get" action="{{ url_for('dashboard') }}#feedback-logs">
+      <input type="date" name="feedback_date" value="{{ feedback_date }}">
+      <button>筛选 / 刷新</button>
+    </form>
+  </div>
+  <div class="table-wrap card">
+    <table>
+      <thead><tr><th>时间</th><th>用户</th><th>反馈原文</th><th>解析动作</th></tr></thead>
+      <tbody>
+      {% for event in feedback_events %}
+      <tr>
+        <td>{{ event.received_at }}</td>
+        <td>{{ event.email }}</td>
+        <td>{{ event.raw_text[:180] }}</td>
+        <td class="small-cell">{{ event.instruction | tojson(indent=0) }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="news" class="panel">
+  <div class="section-header"><h2>今日新闻结果预览</h2><span class="hint">支持手动标记相关 / 不相关，并写入反馈记录。</span></div>
+  <div class="cards three">
+    {% for item in latest_news %}
+    <div class="card news-card">
+      <div class="news-meta"><span>{{ item.source }}</span><span>Score {{ '%.2f'|format(item.relevance_score or 0) }}</span></div>
+      <h3>{{ item.title }}</h3>
+      <div class="small muted">{{ item.published_at or '未知时间' }} · 新闻ID {{ item.news_id }}</div>
+      <p>{{ item.summary or item.content[:160] }}</p>
+      <div class="tag-row"><span class="tag">跨天去重</span><span class="tag">个性化排序</span><span class="tag">反馈可回流</span></div>
+      <div class="table-actions">
+        <a class="button-link" href="{{ item.link }}" target="_blank">原文</a>
+        <form method="post" action="{{ url_for('news_feedback') }}"><input type="hidden" name="recipient" value="{{ recipients[0] if recipients else '' }}"><input type="hidden" name="fingerprint" value="{{ item.fingerprint or item.news_id }}"><input type="hidden" name="title" value="{{ item.title }}"><input type="hidden" name="link" value="{{ item.link }}"><input type="hidden" name="vote" value="1"><button class="primary">相关</button></form>
+        <form method="post" action="{{ url_for('news_feedback') }}"><input type="hidden" name="recipient" value="{{ recipients[0] if recipients else '' }}"><input type="hidden" name="fingerprint" value="{{ item.fingerprint or item.news_id }}"><input type="hidden" name="title" value="{{ item.title }}"><input type="hidden" name="link" value="{{ item.link }}"><input type="hidden" name="vote" value="-1"><button class="danger">不相关</button></form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section id="run" class="panel">
+  <div class="section-header"><h2>手动运行控制</h2><span class="hint">执行后会更新概览卡片和步骤状态。</span></div>
+  <div class="card run-actions">
+    <form method="post" action="{{ url_for('run_action', mode='full') }}"><button class="primary large">运行完整流程</button></form>
+    <form method="post" action="{{ url_for('run_action', mode='fetch') }}"><button>仅抓取</button></form>
+    <form method="post" action="{{ url_for('run_action', mode='send') }}"><button>仅发送</button></form>
+    <form method="post" action="{{ url_for('run_action', mode='feedback') }}"><button>仅检查反馈</button></form>
+  </div>
+  <div class="card">
+    <h3>步骤状态</h3>
+    {% for step in steps %}
+      <div class="step"><span>{{ step.name }}</span><span>{{ step.status }}{% if step.count is defined %} · {{ step.count }}{% endif %}</span></div>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}
