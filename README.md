@@ -12,7 +12,7 @@
 当前默认模型配置为：
 - 服务端点：火山方舟 OpenAI 兼容接口
 - 默认 Base URL：`https://ark.cn-beijing.volces.com/api/v3`
-- 默认模型名：`deepseek-r1-250120`
+- 默认模型名：`deepseek-v3-2-251201`
 
 ---
 
